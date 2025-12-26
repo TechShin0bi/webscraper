@@ -67,7 +67,7 @@ def extract_additional_details(product_url):
             img_filename = img['data-image']
             if img_filename:
                 # Construct the full image URL using the provided pattern
-                full_img_url = f"https://www.pieces-quad-dole.fr/Files/134707/Img/04/{img_filename}"
+                full_img_url = f"https://www.pieces-quad-dole.fr/{img_filename}"
                 if full_img_url not in details['extra_images']:
                     details['extra_images'].append(full_img_url)
         
@@ -89,6 +89,8 @@ def extract_additional_details(product_url):
         print(f"Error extracting details from {product_url}: {str(e)}")
         return None
 
+
+
 def main():
     # Load existing products
     try:
@@ -97,6 +99,7 @@ def main():
     except FileNotFoundError:
         print("Error: products.json not found. Please run product_scraper.py first.")
         return
+    
     
     total_products = len(products)
     print(f"Found {total_products} products to process")
@@ -124,7 +127,7 @@ def main():
         # Be nice to the server
         time.sleep(2)
         
-        # Save progress every 10 products
+        # Save progress every 10 products or on final product
         if i % 10 == 0 or i == total_products:
             with open('products_enhanced.json', 'w', encoding='utf-8') as f:
                 json.dump(products, f, ensure_ascii=False, indent=2)
