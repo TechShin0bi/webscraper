@@ -3,6 +3,11 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+import ijson
+import os
+from tempfile import NamedTemporaryFile
+from decimal import Decimal
+import numbers
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7",
@@ -33,7 +38,6 @@ def extract_additional_details(product_url):
         code_span = soup.find('div', class_='PBItemSku')
         if code_span:
             code_text = code_span.get_text(strip=True)
-            # Extract just the code part, e.g., "Code: 44 210 50ADLY" -> "44 210 50ADLY"
             code = code_text.replace('(Code:', '').replace(')', '').strip()
             details['product_code'] = code
         
@@ -57,7 +61,6 @@ def extract_additional_details(product_url):
             img_tag = thumb.find('img')
             if img_tag and 'src' in img_tag.attrs:
                 img_url = urljoin(product_url, img_tag['src'])
-                # Convert thumbnail URL to larger image URL if possible
                 img_url = img_url.replace('-small.', '-big.')  # Try to get larger version
                 if img_url not in details['extra_images']:
                     details['extra_images'].append(img_url)
@@ -66,7 +69,6 @@ def extract_additional_details(product_url):
         for img in soup.find_all(attrs={"data-image": True}):
             img_filename = img['data-image']
             if img_filename:
-                # Construct the full image URL using the provided pattern
                 full_img_url = f"https://www.pieces-quad-dole.fr/{img_filename}"
                 if full_img_url not in details['extra_images']:
                     details['extra_images'].append(full_img_url)
@@ -89,51 +91,86 @@ def extract_additional_details(product_url):
         print(f"Error extracting details from {product_url}: {str(e)}")
         return None
 
+def process_products(input_file, output_file, batch_size=10):
+    """Process products in batches to handle large files efficiently"""
+    processed_count = 0
+    batch = []
+    temp_file = f"{output_file}.tmp"
+    
+    try:
+        with open(input_file, 'r', encoding='utf-8') as f, \
+             open(temp_file, 'w', encoding='utf-8') as out_f:
+            
+            out_f.write('[\n')
+            first_item = True
+            
+            # Custom JSON encoder to handle Decimal objects
+            class DecimalEncoder(json.JSONEncoder):
+                def default(self, obj):
+                    if isinstance(obj, Decimal):
+                        return float(obj)
+                    if isinstance(obj, numbers.Number):
+                        return float(obj)
+                    return super().default(obj)
 
+            # Use ijson to parse the file efficiently
+            for product in ijson.items(f, 'item'):
+                if 'extra_images' in product:
+                    # Write existing product as is
+                    if not first_item:
+                        out_f.write(',\n')
+                    json.dump(product, out_f, ensure_ascii=False, indent=2, cls=DecimalEncoder)
+                    first_item = False
+                    continue
+                
+                # Process product that needs extra_images
+                print(f"\nProcessing product: {product.get('name')}")
+                print(f"URL: {product.get('url')}")
+                
+                details = extract_additional_details(product.get('url'))
+                if details:
+                    product.update(details)
+                    print(f"  - Found {len(details.get('extra_images', []))} additional images")
+                    if details.get('product_code'):
+                        print(f"  - Product code: {details['product_code']}")
+                
+                # Add to batch
+                if not first_item:
+                    out_f.write(',\n')
+                json.dump(product, out_f, ensure_ascii=False, indent=2, cls=DecimalEncoder)
+                first_item = False
+                
+                processed_count += 1
+                if processed_count % batch_size == 0:
+                    print(f"\nProcessed {processed_count} products...")
+                    out_f.flush()
+                    os.fsync(out_f.fileno())
+                
+                # Be nice to the server
+                time.sleep(1)
+            
+            out_f.write('\n]')
+        
+        # Replace original file with the updated one
+        os.replace(temp_file, output_file)
+        print(f"\nProcessing complete! Updated {processed_count} products in {output_file}")
+        
+    except Exception as e:
+        print(f"Error during processing: {str(e)}")
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+        raise
 
 def main():
-    # Load existing products
-    try:
-        with open('products.json', 'r', encoding='utf-8') as f:
-            products = json.load(f)
-    except FileNotFoundError:
-        print("Error: products.json not found. Please run product_scraper.py first.")
+    input_file = 'products.json'
+    output_file = 'products_enhanced.json'
+    
+    if not os.path.exists(input_file):
+        print(f"Error: {input_file} not found.")
         return
     
-    
-    total_products = len(products)
-    print(f"Found {total_products} products to process")
-    
-    # Process each product
-    for i, product in enumerate(products, 1):
-        if not product.get('url'):
-            print(f"\nSkipping product {i}/{total_products}: No URL provided")
-            continue
-            
-        print(f"\nProcessing product {i}/{total_products}: {product.get('name')}")
-        print(f"URL: {product['url']}")
-        
-        # Get additional details
-        details = extract_additional_details(product['url'])
-        if details:
-            # Update product with additional details
-            product.update(details)
-            print(f"  - Found {len(details.get('extra_images', []))} additional images")
-            if details.get('product_code'):
-                print(f"  - Product code: {details['product_code']}")
-            if details.get('description'):
-                print(f"  - Description: {details['description'][:100]}...")
-        
-        # Be nice to the server
-        time.sleep(2)
-        
-        # Save progress every 10 products or on final product
-        if i % 10 == 0 or i == total_products:
-            with open('products_enhanced.json', 'w', encoding='utf-8') as f:
-                json.dump(products, f, ensure_ascii=False, indent=2)
-            print(f"\nSaved progress after {i} products")
-    
-    print("\nProcessing complete! Enhanced product data saved to products_enhanced.json")
+    print(f"Starting to process products from {input_file}")
+    process_products(input_file, output_file)
 
 if __name__ == "__main__":
     main()
